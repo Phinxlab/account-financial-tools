@@ -120,29 +120,39 @@ class ResCompanyInterest(models.Model):
             # seteamos proxima corrida en hoy mas un periodo
             rec.next_date = interests_date + next_delta
 
-    def create_invoices(self, to_date):
+    def _get_move_line_domains(self, to_date):
+        self.ensure_one()
+        move_line_domain = [
+            ('account_id', 'in', self.receivable_account_ids.ids),
+            ('full_reconcile_id', '=', False),
+            ('date_maturity', '<', to_date)
+        ]
+        return move_line_domain
+
+    def create_invoices(self, to_date, groupby='partner_id'):
         self.ensure_one()
 
         journal = self.env['account.journal'].search([
             ('type', '=', 'sale'),
             ('company_id', '=', self.company_id.id)], limit=1)
 
-        move_line_domain = [
-            ('account_id', 'in', self.receivable_account_ids.ids),
-            ('full_reconcile_id', '=', False),
-            ('date_maturity', '<', to_date)
-        ]
+        move_line_domain = self._get_move_line_domains(to_date)
 
         # Check if a filter is set
         if self.domain:
             move_line_domain += safe_eval(self.domain)
 
+        fields = ['id', 'amount_residual', 'partner_id', 'account_id']
+        if groupby not in fields:
+            fields += [groupby]
+
         move_line = self.env['account.move.line']
         grouped_lines = move_line.read_group(
             domain=move_line_domain,
-            fields=['id', 'amount_residual', 'partner_id', 'account_id'],
-            groupby=['partner_id'],
+            fields=fields,
+            groupby=[groupby],
         )
+
         self = self.with_context(
             company_id=self.company_id.id,
             mail_notrack=True,
@@ -161,7 +171,7 @@ class ResCompanyInterest(models.Model):
             _logger.info(
                 'Creating Interest Invoice (%s of %s) with values:\n%s',
                 idx + 1, total_items, line)
-            partner_id = line['partner_id'][0]
+            partner_id = line[groupby][0]
 
             partner = self.env['res.partner'].browse(partner_id)
             move_vals = self._prepare_interest_invoice(
